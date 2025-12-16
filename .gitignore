@@ -1,3 +1,6 @@
+__pycache__/
+*.py[codz]
+*$py.class
 config.yaml
 *.ipynb
 /data/audio/*
