@@ -1,2 +1,5 @@
 pdfminer.six
 pyyaml
+rapidfuzz
+whisper
+torch

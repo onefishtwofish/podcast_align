@@ -22,11 +22,8 @@ pip install --no-cache-dir `
 
 Write-Host "ROCm PyTorch installation completed." -ForegroundColor Green
 
-Write-Host "Installing whisperx, faster-whisper, ctranslate2, onnxruntime, onxruntime-tools, soundfile, ffmpeg-python, numpy, tqdm, pydub, huggingface_hub" -ForegroundColor Cyan
+Write-Host "Installing whisper" -ForegroundColor Cyan
 
-pip install whisperx --no-deps 
-pip install faster-whisper ctranslate2 onnxruntime onnxruntime-tools `
-            soundfile ffmpeg-python numpy tqdm pydub huggingface_hub `
-            transformers==4.48.0 nltk>=3.9.1 pandas==2.2.3
+pip install -r .\requirements.txt
 
-Write-Host "whisperx installation completed." -ForegroundColor Green
+Write-Host "whisper installation completed." -ForegroundColor Green

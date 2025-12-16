@@ -1,2 +1,5 @@
 config.yaml
 *.ipynb
+/data/audio/*
+/data/subtitles/*
+/data/transcripts/*
