@@ -23,10 +23,8 @@ def format_ass_time(seconds):
 
 
 def build_ass_styles(subtitles, base_style_name='Default'):
-    """
-    Builds per-speaker ASS styles based on annotated speaker colours.
-    """
     styles = {}
+
     styles[base_style_name] = {
         'Name': base_style_name,
         'Fontname': 'Arial',
@@ -36,20 +34,21 @@ def build_ass_styles(subtitles, base_style_name='Default'):
 
     for sub in subtitles:
         speaker = sub.get('speaker_name')
-        color = sub.get('color')
-
-        if not speaker or not color:
+        if not speaker:
             continue
 
         style_name = f"Speaker_{speaker.replace(' ', '_')}"
         if style_name in styles:
             continue
 
+        color_name = sub.get('color', 'white')
+        ass_color = color_name_to_ass(color_name)
+
         styles[style_name] = {
             'Name': style_name,
             'Fontname': 'Arial',
             'Fontsize': '36',
-            'PrimaryColour': ASS_COLOR_MAP.get(color, '&H00FFFFFF&')
+            'PrimaryColour': ass_color
         }
 
     return styles

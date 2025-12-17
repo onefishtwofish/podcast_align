@@ -1,4 +1,5 @@
 __pycache__/
+.venv
 *.py[codz]
 *$py.class
 config.yaml

@@ -1,11 +1,12 @@
 import re
+import unicodedata
 from typing import List, Dict, Any
 
 # Regex to remove page number artifacts 
 PAGE_NUMBER_PATTERN = re.compile(r"[\n\n\s]{1,}[0-9]{1,}[\n\s]{1,}")
 
-# Regex to detect speaker lines
-SPEAKER_PATTERN = re.compile(r'^([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)(?:\s\(([^)]+)\))?\s*$')
+# Regex to detect speaker lines (ic_name [real_name])
+SPEAKER_PATTERN = re.compile(r'^([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)(?:\s[\[\(]([^\]\)]+)[\]\)])?\s*$')
 
 # Regex to detect standalone actions [like this]
 ACTION_PATTERN = re.compile(r'^\s*\[(.+?)\]\s*$')
@@ -27,39 +28,28 @@ TRANSCRIPT_WORD_PATTERN = re.compile(
 # Regex to detect individual words from whisper generated transcript
 WHISPER_WORD_PATTERN = re.compile(r"\b[\w']+\b")
 
-def normalize_transcript(raw_text, PAGE_NUMBER_PATTERN=PAGE_NUMBER_PATTERN, SPEAKER_PATTERN=SPEAKER_PATTERN, ACTION_PATTERN=ACTION_PATTERN):
-    """
-    Normalize a dialogue transcript into structured blocks.
-    
-    Returns:
-        A list of dictionaries with keys:
-            - type: "speech" or "action"
-            - speaker: speaker name or None for actions
-            - text: cleaned text of speech or action
-    """
 
-    # Prepare output list
+def normalize_transcript(raw_text):
     transcript_blocks = []
+    real_name_lookup = {}  # maps real_name -> canonical speaker
+    first_name_lookup = {}  # maps first_name -> canonical speaker
     current_speaker = None
-    current_alias = None
     buffer_lines = []
 
-    # Remove page number artifacts 
+    # Remove page numbers
     raw_text = PAGE_NUMBER_PATTERN.sub("\n\n", raw_text)
-    
-    # Split lines and iterate
     lines = raw_text.splitlines()
-    
+
     for line in lines:
         line = line.strip()
         if not line:
-            continue  # skip empty lines
-        
+            continue
+
         speaker_match = SPEAKER_PATTERN.match(line)
         action_match = ACTION_PATTERN.match(line)
-        
+
         if speaker_match:
-            # Save previous speech block if exists
+            # Flush any buffered speech
             if buffer_lines:
                 transcript_blocks.append({
                     "type": "speech",
@@ -67,13 +57,31 @@ def normalize_transcript(raw_text, PAGE_NUMBER_PATTERN=PAGE_NUMBER_PATTERN, SPEA
                     "text": " ".join(buffer_lines).strip()
                 })
                 buffer_lines = []
-            
-            # Set current speaker
-            current_speaker = speaker_match.group(1)
-            current_alias = speaker_match.group(2)  # optional, could store if needed
-            
+
+            in_char_name = speaker_match.group(1)
+            real_name = speaker_match.group(2) or in_char_name
+
+            # If this is a first-name-only real_name, attempt to resolve
+            if ' ' not in real_name:
+                if real_name in first_name_lookup:
+                    canonical_name = first_name_lookup[real_name]
+                else:
+                    canonical_name = real_name
+                    first_name_lookup[real_name] = canonical_name
+            else:
+                canonical_name = real_name
+                # Also update first_name lookup
+                first_name = real_name.split()[0]
+                first_name_lookup[first_name] = canonical_name
+
+            # Update real_name mapping
+            if real_name not in real_name_lookup:
+                real_name_lookup[real_name] = canonical_name
+
+            current_speaker = canonical_name
+
         elif action_match:
-            # Save any buffered speech first
+            # Flush any buffered speech
             if buffer_lines:
                 transcript_blocks.append({
                     "type": "speech",
@@ -81,27 +89,53 @@ def normalize_transcript(raw_text, PAGE_NUMBER_PATTERN=PAGE_NUMBER_PATTERN, SPEA
                     "text": " ".join(buffer_lines).strip()
                 })
                 buffer_lines = []
-            
-            # Save the action as a separate block
+
+            # Keep square brackets intact
             transcript_blocks.append({
                 "type": "action",
                 "speaker": None,
-                "text": action_match.group(1).strip()
+                "text": f"[{action_match.group(1).strip()}]"
             })
-            
+
         else:
-            # Regular speech line
             buffer_lines.append(line)
-    
-    # Append any remaining buffered speech
+
+    # Flush remaining buffer
     if buffer_lines:
         transcript_blocks.append({
             "type": "speech",
             "speaker": current_speaker,
             "text": " ".join(buffer_lines).strip()
         })
-    
-    return transcript_blocks
+
+    def unify_speaker_names(transcript_blocks):
+        """
+        Replace any first-name-only speaker references with their canonical full names.
+        """
+        # Build a mapping from first name -> canonical full name
+        canonical_mapping = {}
+        for block in transcript_blocks:
+            speaker = block["speaker"]
+            if not speaker:
+                continue
+            # If it's a full name (2+ words), use it as canonical
+            if len(speaker.split()) > 1:
+                first_name = speaker.split()[0]
+                canonical_mapping[first_name] = speaker
+
+        # Second pass: replace all speaker fields using canonical mapping
+        for block in transcript_blocks:
+            speaker = block["speaker"]
+            if not speaker:
+                continue
+            first_name = speaker.split()[0]
+            if first_name in canonical_mapping:
+                block["speaker"] = canonical_mapping[first_name]
+
+        return transcript_blocks
+
+
+    return unify_speaker_names(transcript_blocks)
 
 
 def split_cues(normalized_transcript):
@@ -234,6 +268,39 @@ def transcript_to_alignment_tables(transcript):
 
     next_cue_id = 0
 
+
+    def normalize_word(raw: str) -> str:
+        """
+        Normalization tuned for Whisper-style transcript alignment.
+
+        - Lowercases the word
+        - Strips punctuation except apostrophes within contractions
+        - Normalizes unicode characters (accents, fancy quotes)
+        - Converts ellipses, em dashes, and fancy quotes to plain equivalents
+        - Collapses multiple spaces
+        """
+        word = raw.lower()
+        
+        # Normalize unicode (accents, fancy quotes)
+        word = unicodedata.normalize('NFKD', word)
+        
+        # Standardize quotes and dashes
+        word = word.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+        word = word.replace("–", "-").replace("—", "-")
+        word = word.replace("…", "...")
+
+        # Keep letters, numbers, internal apostrophes for contractions, and dots for ellipses
+        word = re.sub(r"[^\w\s'\.]", "", word)
+        
+        # Remove apostrophes at start or end of word (not part of contraction)
+        word = re.sub(r"(^'+|'+$)", "", word)
+        
+        # Collapse multiple spaces
+        word = re.sub(r"\s+", " ", word).strip()
+        
+        return word
+
+
     for utt_id, entry in enumerate(transcript):
         speaker = entry.get("speaker")
         text = entry["text"]
@@ -277,7 +344,7 @@ def transcript_to_alignment_tables(transcript):
 
         for pos, raw in enumerate(tokens):
             word_raw.append(raw)
-            word_norm.append(raw.lower())
+            word_norm.append(normalize_word(raw))
             speaker_id.append(spk_id)
             utterance_id.append(utt_id)
             pos_in_utt.append(pos)

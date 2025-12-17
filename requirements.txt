@@ -1,5 +1,5 @@
 pdfminer.six
 pyyaml
 rapidfuzz
-whisper
+openai-whisper
 torch

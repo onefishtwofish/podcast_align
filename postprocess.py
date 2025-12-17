@@ -219,15 +219,17 @@ def chunk_reintegrated_utterances(reintegrated_utterances, **kwargs):
 
 def normalise_subtitle_timings(
     subtitles,
-    post_padding=0.25,
+    post_padding=2,
     absolute_floor=1.0,
     multi_word_floor=1.5,
-    seconds_per_word=0.33
+    seconds_per_word=0.33,
+    frame_epsilon=0.001  # ~1ms = single-frame safe
 ):
     """
     Normalises subtitle timings for readability and temporal sanity.
 
-    Assumes subtitles are sorted by start_time.
+    Ensures subtitle transitions happen on a single frame when padding
+    would cause overlap with the next subtitle from the same speaker.
     """
     normalised = []
 
@@ -248,12 +250,11 @@ def normalise_subtitle_timings(
         estimated = word_count * seconds_per_word
         min_duration = max(floor, estimated)
 
-        # Enforce minimum duration (NO overlap logic here)
         if (end - start) < min_duration:
             end = start + min_duration
 
         # -------------------------
-        # 2. Apply post-padding (conditionally)
+        # 2. Apply post-padding
         # -------------------------
         padded_end = end + post_padding
 
@@ -266,12 +267,15 @@ def normalise_subtitle_timings(
                 and prev.get('type') == 'speech'
             )
 
-            # Cues are invisible for overlap blocking
-            if same_speaker and padded_end > prev['start_time']:
-                # Clamp padding, NOT minimum duration
-                padded_end = min(padded_end, prev['start_time'])
+            if same_speaker:
+                # If padding would overlap, end just before next subtitle
+                if padded_end > start:
+                    padded_end = max(
+                        end,           # never shrink below minimum
+                        start - frame_epsilon
+                    )
 
-        end = max(end, padded_end)
+        end = padded_end
 
         # -------------------------
         # 3. Write result
@@ -283,6 +287,7 @@ def normalise_subtitle_timings(
         })
 
     return normalised
+
 
 
 def annotate_speaker_colors(subtitles, speaker_colors=None, cue_color='grey'):
